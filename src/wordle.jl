@@ -65,13 +65,20 @@ struct Guess
     end
 end
 
-function condition(len::Int)
-    word -> length(word) == len && lastindex(word) == len && !contains(word, "'")
-end
 
-function readdictionary(len::Int)
-    words = readlines(datadir("words"))
-    unique(map(lowercase, filter(condition(len), words)))
+function readdictionary(n::Int)
+    condition = word -> length(word) == n && lastindex(word) == n && !contains(word, "'")
+
+    dictionary = if isfile(datadir("words-$n"))
+        datadir("words-$n")
+    else
+        datadir("words")
+    end
+
+    @info "Reading dictionary $dictionary"
+    words = sort!(unique(map(lowercase, filter(condition, readlines(dictionary)))))
+    @info "Read $(length(words)) words"
+    words
 end
 
 const Partition = Dict{Int, Set{String}}
@@ -158,5 +165,5 @@ function bestguess(web::Web, guesses::Guess...)
     ss = scores(web, guesses...)
     i = findlast(s -> isapprox(s.entropy, ss[1].entropy), ss)
     @info "There are $i best guesses"
-    ss[rand(1:i)]
+    ss[1]
 end

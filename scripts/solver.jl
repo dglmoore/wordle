@@ -69,36 +69,47 @@ function main()
         exit(1)
     end
 
-    web = loadweb(n)
+    @time web = Web(n)
 
     display(usage)
     println("\n")
 
-    guesses = Guess[]
-
-    count = 0
     while true
-        count += 1
-        g = bestguess(web, guesses...)
-        if iszero(g.entropy)
-            println("$(g.word); final guess after $count guesses")
-            break
-        elseif isinf(g.entropy)
-            println("Giving up after $count guesses")
-            break
+        guesses = Guess[]
+        count = 0
+
+        while true
+            count += 1
+            g = bestguess(web, guesses...)
+            if iszero(g.entropy)
+                println("$(g.word); final guess after $count guesses")
+                break
+            elseif isinf(g.entropy)
+                println("Giving up after $count guesses")
+                break
+            else
+                println(g.word)
+            end
+
+            res = getinput(length(g.word))
+
+            guess = Guess(g.word, res)
+            if guess.code == 3^length(g.word)
+                println("won after $count guesses")
+                break
+            end
+
+            push!(guesses, guess)
+        end
+
+        println("\nPlay again?")
+        print("> ")
+        response = strip(readline(stdin))
+        if response == "y" || response == "yes"
+            continue
         else
-            println(g.word)
-        end
-
-        res = getinput(length(g.word))
-
-        guess = Guess(g.word, res)
-        if guess.code == 3^length(g.word)
-            println("won after $count guesses")
             break
         end
-
-        push!(guesses, guess)
     end
 end
 
