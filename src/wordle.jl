@@ -1,4 +1,4 @@
-using DrWatson
+using Base.Threads, DrWatson
 
 @enum Match begin
     notInWord = 0
@@ -20,10 +20,20 @@ function encode(clue::Vector{Match})
     for c in clue
         value = 3value + Int(c)
     end
-    value + 1
+    value
 end
 
-function entropy(histogram::Vector{Int})
+function codetype(word::AbstractString)
+    N = length(word)
+    for type in [UInt8, UInt16, UInt32, UInt64]
+        if BigInt(3)^N <= BigInt(typemax(type))
+            return type
+        end
+    end
+    BigInt
+end
+
+function entropy(histogram::AbstractVector{Int})
     N = sum(histogram)
     if N != 0
         h = 0.0
@@ -34,37 +44,41 @@ function entropy(histogram::Vector{Int})
         end
         (h / N) + log2(N)
     else
-        0.0
         -Inf
     end
 end
 
+function entropy(histogram::AbstractMatrix{Int})
+    [entropy(@view histogram[:,i]) for i in 1:size(histogram, 2)]
+end
+
 function result(guess::String, target::String)
-    result = map(1:length(guess)) do i
-        if guess[i] == target[i]
+    value = 0
+    for i in 1:length(guess)
+        c = if guess[i] == target[i]
             inPlace
         elseif contains(target, guess[i])
             inWord
         else
             notInWord
         end
+        value = 3value + Int(c)
     end
-    encode(result)
+    value
 end
 
-struct Guess
+struct Guess{U <: Union{Unsigned,BigInt}}
     word::String
     result::Vector{Match}
-    code::Int
+    code::U
     function Guess(word::String, result::Vector{Match})
-        new(word, result, encode(result))
+        new{codetype(word)}(word, result, encode(result))
     end
 
-    function Guess(word::String, code::Int)
-        new(word, clue(code, length(word)), code)
+    function Guess(word::String, code::Integer)
+        new{codetype(word)}(word, clue(code, length(word)), code)
     end
 end
-
 
 function readdictionary(n::Int)
     condition = word -> length(word) == n && lastindex(word) == n && !contains(word, "'")
@@ -81,89 +95,90 @@ function readdictionary(n::Int)
     words
 end
 
-const Partition = Dict{Int, Set{String}}
-
-struct Web
-    r::Dict{String, Partition}
+struct Wordle{U <: Union{Unsigned,BigInt}}
+    words::Vector{String}
+    n::Int
+    b::U
+    A::Matrix{U}
 end
 
-Web() = Web(Dict{String, Partition}())
+function Wordle(words::Vector{String})
+    isempty(words) && error("must provide some words")
 
-function Web(words::Vector{String})
-    web = Web()
-    for word in words
-        partition = Dict{Int, Set{String}}()
-        for other in words
-            r = result(word, other)
-            if haskey(partition, r)
-                push!(partition[r], other)
-            else
-                partition[r] = Set([other])
-            end
+    type = codetype(words[1])
+
+    L = length(words[1])
+    b = type(3)^L
+    N = length(words)
+    A = zeros(type, N, N)
+    @threads for j in 1:N
+        for i in 1:N
+            A[i,j] = result(words[j], words[i])
         end
-        @assert sum(length.(values(partition))) == length(words)
-        web.r[word] = partition
     end
-    @assert length(web.r) == length(words)
-    web
+    Wordle{type}(words, L, b, A)
 end
 
-Web(n::Int) = Web(readdictionary(n))
+Wordle(n::Int) = Wordle(readdictionary(n))
 
-words(web::Web) = collect(keys(web.r))
+histogram(w::Wordle, word::String) = histogram(w, findfirst(w.words .== word))
 
-function histogram(web::Web, word::String)
-    histogram = map(length, values(web.r[word]))
-    @assert sum(histogram) == length(web.r)
-    histogram
+function histogram(w::Wordle, i::Int)
+    h = zeros(Int, w.b)
+    @threads for c in @view w.A[:,i]
+        h[c + 1] += 1
+    end
+    h
 end
 
-function histogram(web::Web, word::String, possible::Set{String})
-    map(x -> length(intersect(x, possible)), values(web.r[word]))
-end
-
-function condition(web::Web, guesses::Guess...)
-    intersect(map(guesses) do guess
-        if haskey(web.r, guess.word) && haskey(web.r[guess.word], guess.code)
-            web.r[guess.word][guess.code]
-        else
-            Set{String}()
+function histogram(w::Wordle)
+    h = zeros(Int, w.b, size(w.A, 2))
+    @threads for j in 1:size(w.A, 2)
+        for c in @view w.A[:,j]
+            h[c + 1, j] += 1
         end
-    end...)
+    end
+    h
 end
 
-entropy(web::Web, word::String) = entropy(histogram(web, word))
-
-function entropy(web::Web, word::String, guesses::Guess...)
-    entropy(web, word, condition(web, guesses...))
+function histogram(w::Wordle{U}, possible::AbstractVector{Int}) where U
+    h = zeros(Int, w.b, size(w.A, 2))
+    @threads for j in 1:size(w.A, 2)
+        for x in possible
+            h[w.A[x, j] + 1, j] += 1
+        end
+    end
+    h
 end
 
-function entropy(web::Web, word::String, possible::Set{String})
-    entropy(histogram(web, word, possible))
+histogram(w::Wordle{U}, guesses::Guess{U}...) where U = histogram(w, possible(w, guesses...))
+
+function possible(w::Wordle{U}, guesses::Guess{U}...) where U
+    possible = collect(1:size(w.A, 1))
+    for guess in guesses
+        intersect!(possible, w[guess])
+    end
+    possible
 end
 
-entropy(web::Web, guesses::Guess...) = map(words(web)) do word
-    if isempty(guesses)
-        return (; entropy=entropy(web, word), word)
+Base.getindex(w::Wordle, idx::Union{Colon,Integer}...) = getindex(w.A, idx...)
+Base.getindex(w::Wordle, word::String) = w[:, findfirst(w.words .== word)]
+Base.getindex(w::Wordle{U}, guess::Guess{U}) where U = findall(w[guess.word] .== guess.code)
+
+function bestguess(w::Wordle{U}, guesses::Guess{U}...) where U
+    p = possible(w, guesses...)
+    if isempty(p)
+        nothing
     end
 
-    possible = condition(web, guesses...)
-    h = entropy(web, word, possible)
-    if !iszero(h) || (iszero(h) && word in possible)
-        (; entropy=h, word)
+    h, i = findmax(entropy(histogram(w, p)))
+
+    if !iszero(h)
+        (; entropy=h, word=w.words[i])
+    elseif length(p) == 1
+        (; entropy=0.0, word=w.words[p[i]])
     else
-        (; entropy=-Inf, word)
+        @error "Multiple possible, indistinguishable solutions" possible=p
+        nothing
     end
-end
-
-function scores(web::Web, guesses::Guess...)
-    results = entropy(web, guesses...)
-    sort!(results, by=x -> x.entropy, rev=true)
-end
-
-function bestguess(web::Web, guesses::Guess...)
-    ss = scores(web, guesses...)
-    i = findlast(s -> isapprox(s.entropy, ss[1].entropy), ss)
-    @info "There are $i best guesses"
-    ss[1]
 end

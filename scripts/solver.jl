@@ -5,13 +5,13 @@ include(srcdir("wordle.jl"))
 function loadweb(n)
     filename = datadir("web_$n.jld2")
     if isfile(filename)
-        @info "Loading Web($n) from file"
+        @info "Loading Wordle($n) from file"
         web = load(filename, "web")
         @info "done"
         web
     else
-        @info "Precomputing Web($n)"
-        web = Web(n)
+        @info "Precomputing Wordle($n)"
+        web = Wordle(n)
         @info "Saving to $filename"
         save(filename, Dict("web" => web))
         @info "done"
@@ -69,7 +69,7 @@ function main()
         exit(1)
     end
 
-    @time web = Web(n)
+    @time web = Wordle(n)
 
     display(usage)
     println("\n")
@@ -81,11 +81,11 @@ function main()
         while true
             count += 1
             g = bestguess(web, guesses...)
-            if iszero(g.entropy)
-                println("$(g.word); final guess after $count guesses")
+            if isnothing(g)
+                println("Giving up after $(count - 1) guesses")
                 break
-            elseif isinf(g.entropy)
-                println("Giving up after $count guesses")
+            elseif iszero(g.entropy)
+                println("$(g.word); final guess after $count guesses")
                 break
             else
                 println(g.word)
