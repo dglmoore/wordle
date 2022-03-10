@@ -168,15 +168,18 @@ Base.getindex(w::Wordle{U}, guess::Guess{U}) where U = findall(w[guess.word] .==
 function bestguess(w::Wordle{U}, guesses::Guess{U}...) where U
     p = possible(w, guesses...)
     if isempty(p)
-        nothing
+        return nothing
     end
 
-    h, i = findmax(entropy(histogram(w, p)))
+    entropies = entropy(histogram(w, p))
+    h, _ = findmax(entropies)
+    best = findall(isapprox.(entropies, h))
 
-    if !iszero(h)
+    if !iszero(h) && !isinf(h)
+        i = rand(best)
         (; entropy=h, word=w.words[i])
     elseif length(p) == 1
-        (; entropy=0.0, word=w.words[p[i]])
+        (; entropy=0.0, word=w.words[p[1]])
     else
         @error "Multiple possible, indistinguishable solutions" possible=p
         nothing
